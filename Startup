@@ -1,0 +1,41 @@
+.libPaths("U:/R/library")
+
+library(tidyverse)
+
+
+HCHours <- read_csv("Data/ZoeHomecareHours.csv",
+                    col_types = cols(
+                      FYQuarterEndDate = col_date("%d/%m/%Y")
+                    ))
+
+HCHours <- HCHours %>%
+  mutate(CarerType = if_else(`Pair Type` == "NULL" | `Pair Type` == "Main", "Single",`Pair Type`,""))
+
+LocalityTab <- HCHours %>%
+  select(-Neighbourhood) %>%
+  group_by(Period, FinancialYear, Year, YQuarter, FYQuarter, FYQuarterEndDate, Locality, CarerType) %>%
+  summarise(Visits = sum(`Total Visits`),
+            Hours = sum(`Total Hours`))
+
+N_hoodTab <- HCHours %>%
+  group_by(Period, FinancialYear, Year, YQuarter, FYQuarter, FYQuarterEndDate, Locality, Neighbourhood, CarerType) %>%
+  summarise(Visits = sum(`Total Visits`),
+            Hours = sum(`Total Hours`))
+
+Locality1 <- HCHours %>%
+  select(Year, YQuarter, Locality, `Total Hours`)
+
+
+Locality2 <- Locality1 %>%
+  group_by(Year, YQuarter, Locality) %>%
+  summarise(TotalHours = sum(`Total Hours`)) %>%
+  spread(key = "Locality", value = "TotalHours")
+
+
+LocalityTS <- Locality2 %>%
+  select(-Year, -YQuarter) %>%
+  ts(Locality2, start = c(2015,2), end = c(2018,1), frequency = 4)
+
+ts.plot(LocalityTS[,c(3:7)], col = 1:5, xlab = "Quarter", ylab = "Homecare Hours")
+legend("right", colnames(LocalityTS[,c(3:7)]), lty = 1, col = 1:5, bty = "n")
+  
