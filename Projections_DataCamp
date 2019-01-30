@@ -1,0 +1,88 @@
+# Time series analysis of Homecare Hours and projections based on DataCamp tutorial for forecasting using timeseries data
+
+# .libPaths("U:/R/library")
+
+library(tidyverse)
+library(readxl)
+library(fpp2)
+library(forecast)
+library(stringr)
+library(lubridate)
+
+HCHours <- read_xlsx("Data/Home Care Neighbourhood Monthly Activity Apr 15 - Nov 18.xlsx", sheet = "All Months Data")
+
+# Add Year, Month, QuarterEnd and MonthStart dates
+HCHours_Table <- HCHours %>%
+  mutate(Year = str_c("20", substr(Period, start = 1, stop = 2)),
+         Month = substr(Period, start = 4, stop = 5),
+         Quarter = if_else(Month %in% c("04", "05", "06"), as.double(1),
+                           if_else( Month %in% c("07", "08", "09"), as.double(2), 
+                                    if_else(Month %in% c("10", "11", "12"), as.double(3),
+                                            if_else(Month %in% c("01", "02", "03"), as.double(4), 
+                                                    as.double(0))))),
+         MonthStart = make_date(Year, Month, 01),
+         QuarterEnd = if_else(Quarter == 4, make_date(Year, 03, 31),
+                             if_else(Quarter == 3, make_date(Year, 12, 31),
+                                     if_else(Quarter == 2, make_date(Year, 09, 30),
+                                             make_date(Year, 06, 30)))),
+        Year = year(QuarterEnd),
+        Month = month(MonthStart))
+
+# total number of homecare hours each month at city level                             
+City_HCHours <- HCHours_Table %>%
+  group_by(MonthStart) %>%
+  summarise(TotalHours = sum(`Total Hours`))
+
+# create timeseries for citywide monthly homecare hours
+City_HCHoursTS <- ts(City_HCHours[, 2], start = c(2015, 4), frequency = 12)
+
+# Examine timeseries
+# Plots of timeseries data
+autoplot(City_HCHoursTS)
+autoplot(diff(City_HCHoursTS))
+ggseasonplot(City_HCHoursTS)
+ggsubseriesplot(City_HCHoursTS)
+# plot lag and acf plot
+gglagplot(City_HCHoursTS)
+# Acf plot shows whether TS is white noise - peaks outside blue dashed lines show not
+# white noise so can be used for forecasting
+ggAcf(City_HCHoursTS)
+ggAcf(diff(City_HCHoursTS))
+# Ljung-Box test to see if TS is white noise - small p value indicates not white noise
+Box.test(City_HCHoursTS, lag = 24, fitdf = 0, type = "Ljung")
+
+# forecasts for timeseries
+n_cityHours <- naive(City_HCHoursTS, h = 24)
+autoplot(n_cityHours)
+summary(n_cityHours)
+checkresiduals(n_cityHours)
+s_cityHours <- snaive(City_HCHoursTS, h = 24)
+autoplot(s_cityHours, h = 24)
+summary(s_cityHours, h = 24)
+checkresiduals(s_cityHours)
+
+# subset timeseries into training and test data sets to test whether model is good
+# and not overfitted
+train <- subset(City_HCHoursTS, end = 36)
+naive_fc <- naive(train, h = 8)
+mean_fc <- meanf(train, h = 8)
+accuracy(naive_fc, City_HCHoursTS)
+accuracy(mean_fc, City_HCHoursTS)
+# forecast of seasonal method
+train1 <- window(City_HCHoursTS, end = c(2018, 3))
+fc1 <- snaive(train1, h = 12)
+accuracy(fc1, City_HCHoursTS)
+
+# time series cross-validation - run number of models each moving one point on to see which
+# is the best forecast
+e = tsCV(City_HCHoursTS, forecastfunction = naive, h = 16)
+mse <- colMeans(e^2, na.rm = TRUE)
+data.frame(h = 1:16, MSE = mse) %>%
+  ggplot(aes(x = h, y = MSE)) + geom_point()
+
+# exponential weighted forecasts - most recent time points have more weight as move back
+# in time points have progresively less weight
+fc <- ses(City_HCHoursTS, h = 16)
+summary(fc)
+autoplot(fc)
+autoplot(fc) + autolayer(fitted(fc))
