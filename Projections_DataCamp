@@ -86,3 +86,12 @@ fc <- ses(City_HCHoursTS, h = 16)
 summary(fc)
 autoplot(fc)
 autoplot(fc) + autolayer(fitted(fc))
+
+# ets function - finds the best model to use
+ets(City_HCHoursTS)
+
+City_HCHoursTS %>%
+  ets() %>%
+  forecast(h = 52) %>%
+  autoplot()
+  
