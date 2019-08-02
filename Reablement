@@ -1,0 +1,338 @@
+# how are delays affecting capacity within Reablement
+Delays <- Reablement %>%
+  group_by(CapacityMonthYr, Locality, Ward) %>%
+  summarise(Delays = sum(Delayed, na.rm = TRUE),
+  NoCapReferrals = sum(NoCapRef, na.rm = TRUE))
+
+# comparisons between delays and no capacity referrals 
+Delays %>%
+  group_by(CapacityMonthYr, Locality) %>%
+  summarise(TDelays = sum(Delays, na.rm = TRUE),
+            TNoCapRef = sum(NoCapReferrals, na.rm = TRUE)) %>%
+  ggplot() +
+  geom_line(aes(CapacityMonthYr, TDelays), color = "blue") +
+  geom_line(aes(CapacityMonthYr, TNoCapRef), color = "red") +
+  facet_wrap(~Locality)
+
+Delays %>%
+  filter(CapacityMonthYr >= "2017-04-01",
+         !is.na(Locality)) %>%
+  rename(Month = CapacityMonthYr) %>%
+  group_by(Month, Locality) %>%
+  summarise(TDelays = sum(Delays, na.rm = TRUE),
+            TNoCapRef = sum(NoCapReferrals, na.rm = TRUE)) %>%
+  ggplot(aes(TDelays, TNoCapRef, color = Locality, alpha = Month)) +
+  geom_point() +
+  labs(x = "Total Number of People Delayed in Reablemet",
+       y = "Total Number of No Capacity Referrals",
+       title = "Relationship between number of people delayed in reablement and number \nof referrals that are declined due to no capacity each month") +
+  theme(panel.background = element_rect(fill = "white"),
+        axis.line = element_line(size = 1, color = "grey40"),
+        legend.background = element_rect(fill = "white")) +
+  ggsave("Output/DelaysAndNoCapacityLink.png")
+
+
+### Calculate numbers of referrals, people, delays and hours in reablement each day ###
+# Create sequence of days from 1st April 2017 for each locality
+ServiceDaysN <- data.frame(date = seq(as.Date("2017-04-01"), as.Date(today()), "days"),
+Locality = "North")
+ServiceDaysC <- data.frame(date = seq(as.Date("2017-04-01"), as.Date(today()), "days"),
+Locality = "Central")
+ServiceDaysS <- data.frame(date = seq(as.Date("2017-04-01"), as.Date(today()), "days"),
+Locality = "South")
+
+# Split Reablement data into localities to count number in service and delayed each day
+ReablementN <- Reablement %>%
+  filter(Locality == "North")
+ReablementC <- Reablement %>%
+  filter(Locality == "Central")
+ReablementS <- Reablement %>%
+  filter(Locality == "South")
+
+# number of people in Reablement each day
+ServiceDaysN$ActiveCases <- sapply(ServiceDaysN$date, function (x)
+  sum(as.Date(ReablementN$StartDate) < as.Date(x) & as.Date(ReablementN$EndDateMod) > as.Date(x), na.rm = TRUE))
+ServiceDaysC$ActiveCases <- sapply(ServiceDaysC$date, function (x)
+  sum(as.Date(ReablementC$StartDate) < as.Date(x) & as.Date(ReablementC$EndDateMod) > as.Date(x), na.rm = TRUE))
+ServiceDaysS$ActiveCases <- sapply(ServiceDaysS$date, function (x)
+  sum(as.Date(ReablementS$StartDate) < as.Date(x) & as.Date(ReablementS$EndDateMod) > as.Date(x), na.rm = TRUE))
+
+#Number of Hours of reablement each day
+ReablementN$interval <- interval(ReablementN$StartDate, ReablementN$EndDateMod)
+ReablementC$interval <- interval(ReablementC$StartDate, ReablementC$EndDateMod)
+ReablementS$interval <- interval(ReablementS$StartDate, ReablementS$EndDateMod)
+
+outputN <- do.call(rbind, lapply(ServiceDaysN$date, function(x){
+  index <- x %within% ReablementN$interval;
+  list(Hours = sum((ReablementN$StartHours/7)[index], na.rm = TRUE))}))
+ServiceHoursN <- cbind(ServiceDaysN, unlist(outputN)) %>% rename(Hours = `unlist(outputN)`)
+
+outputC <- do.call(rbind, lapply(ServiceDaysC$date, function(x){
+  index <- x %within% ReablementC$interval;
+  list(Hours = sum((ReablementC$StartHours/7)[index], na.rm = TRUE))}))
+ServiceHoursC <- cbind(ServiceDaysC, unlist(outputC)) %>% rename(Hours = `unlist(outputC)`)
+
+outputS <- do.call(rbind, lapply(ServiceDaysS$date, function(x){
+  index <- x %within% ReablementS$interval;
+  list(Hours = sum((ReablementS$StartHours/7)[index], na.rm = TRUE))}))
+ServiceHoursS <- cbind(ServiceDaysS, unlist(outputS)) %>% rename(Hours = `unlist(outputS)`)
+
+ServiceHours <- ServiceHoursN %>%
+  union_all(ServiceHoursC) %>%
+  union_all(ServiceHoursS) %>%
+  arrange(date) %>%
+  select(-ActiveCases) %>%
+  data.frame()
+
+# Number of People dealyed in Reablement
+ServiceDaysN$Delays <- sapply(ServiceDaysN$date, function (x)
+  sum(as.Date(ReablementN$ExpectedEndDate) < as.Date(x) & as.Date(ReablementN$EndDateMod) > as.Date(x), na.rm = TRUE))
+ServiceDaysC$Delays <- sapply(ServiceDaysC$date, function (x)
+  sum(as.Date(ReablementC$ExpectedEndDate) < as.Date(x) & as.Date(ReablementC$EndDateMod) > as.Date(x), na.rm = TRUE))
+ServiceDaysS$Delays <- sapply(ServiceDaysS$date, function (x)
+  sum(as.Date(ReablementS$ExpectedEndDate) < as.Date(x) & as.Date(ReablementS$EndDateMod) > as.Date(x), na.rm = TRUE))
+
+ServiceDays <- ServiceDaysN %>%
+  union_all(ServiceDaysC) %>%
+  union_all(ServiceDaysS) %>%
+  arrange(date)
+
+DailyActivity <- ServiceDays %>%
+  left_join(ServiceHours) 
+
+
+rm(ServiceDaysN, ServiceDaysC, ServiceDaysS, ReablementC, ReablementN, ReablementS, 
+   outputN, outputC, outputS, ServiceHoursC, ServiceHoursN, ServiceHoursS, ServiceHours)
+
+# Number of Referrals Each Day
+DailyReferrals <- Reablement %>%
+group_by(ReferralDate, Locality, RefOutcomeCategory) %>%
+summarise(Referrals = n()) %>%
+filter(!is.na(RefOutcomeCategory)) %>%
+mutate(Referrals = if_else(is.na(Referrals),0, as.double(Referrals))) %>%
+spread(key = RefOutcomeCategory, value = Referrals) %>%
+mutate_all(funs(if_else(is.na(.), 0, .)))
+
+DailyStarts <- Reablement %>%
+  group_by(StartDate, Locality) %>%
+  summarise(ServiceStarts = n())
+
+DailyEnds <- Reablement %>%
+  group_by(EndDate, Locality) %>%
+  summarise(ServiceEnds = n())
+
+DelayStarts <- Reablement %>%
+  group_by(ExpectedEndDate, Locality) %>%
+  summarise(DelaysStarts = n())
+
+DelayEnds <- Reablement %>%
+  filter(Delayed == 1) %>%
+  group_by(EndDate, Locality) %>%
+  summarise(DelayEnds = n())
+
+# Join all tables together
+ReablementService <- DailyActivity %>%
+  left_join(DailyReferrals, by = c("date" = "ReferralDate", "Locality" = "Locality")) %>%
+  left_join(DailyStarts, by = c("date" = "StartDate", "Locality" = "Locality")) %>%
+  left_join(DailyEnds, by = c("date" = "EndDate", "Locality" = "Locality")) %>%
+  left_join(DelayStarts, by = c("date" = "ExpectedEndDate", "Locality" = "Locality")) %>%
+  left_join(DelayEnds, by = c("date" = "EndDate", "Locality" = "Locality")) %>%
+  write_csv("Output/ReablementService.csv")
+
+
+# check on hours each month - monthly method against daily method
+ReablementService %>%
+  filter(date>= "2018-04-01" & date < "2019-03-01") %>%
+  group_by(floor_date(date, "month")) %>%
+  summarise(THours = sum(Hours, na.rm = TRUE))
+
+
+# graph of number of people in service each day
+ReablementService %>%
+  select(-Locality) %>%
+  group_by(date) %>%
+  filter(date >= "2017-06-01", date < today()) %>%
+  summarise_all(funs(sum(.,na.rm = TRUE))) %>%
+  ggplot(aes(date, ActiveCases, alpha = 0.5)) +
+  geom_line() +
+  geom_smooth(color = "black", linetype = "dotted", se = FALSE) +
+  labs(x = "Day",
+       y = "Number of People in Reablement",
+       title = "Number of people in Reablement each day over time") +
+  theme(panel.background = element_rect(fill = "white"),
+        axis.line = element_line(size = 1, color = "grey40"),
+        legend.position = "none") +
+    ggsave("Output/ActiveCasesEachDay.png")
+
+# number of people in service each day by locality
+ReablementService %>%
+  filter(date >= "2017-05-01" & date < today()) %>%
+  ggplot(aes(date, ActiveCases, color = Locality)) +
+  geom_line(alpha = 0.5) +
+  geom_smooth(se = FALSE)
+
+# number of hours in service each day by locality
+ReablementService %>%
+  filter(date >= "2018-04-01" & date < today()) %>%
+  ggplot(aes(date, Hours, color = Locality)) +
+  geom_line()
+
+# number of hours and people in service each day by locality
+ReablementService %>%
+  select(-Locality) %>%
+  group_by(date) %>%
+  filter(date >= "2018-04-01", date < today()) %>%
+  summarise_all(funs(sum(.,na.rm = TRUE))) %>%
+  ggplot() +
+  geom_smooth(aes(date, ActiveCases), se = FALSE) +
+  geom_smooth(aes(date, Hours), se = FALSE)
+
+# relationship between number of people in the service and number of hours each day by locality
+# shows similar picture to monthly data 
+ReablementService %>%
+  filter(date >= "2018-04-01", date < today()) %>%
+  ggplot() +
+  geom_smooth(aes(date, ActiveCases, color = Locality), se = FALSE) +
+  geom_smooth(aes(date, Hours, color = Locality), se = FALSE)
+
+###
+# Number of delays by day
+ReablementService %>%
+  filter(date >= "2018-04-01" & date < "2019-03-01") %>%
+  group_by(date) %>%
+  summarise(TDelays = sum(Delays, na.rm = TRUE),
+            TNoCap = sum(`No Capacity`, na.rm = TRUE)) %>%
+  ggplot() +
+  geom_line(aes(date, TDelays)) +
+  geom_line(aes(date, TNoCap)) +
+  labs(x = "Date",
+       y = "Number of People Dealyed in Reablement",
+       title = "Number of people delayed leaving Reablement each day during 2018/19") +
+  theme(panel.background = element_rect(fill = "white"),
+        axis.line = element_line(size = 1, color = "grey40"),
+        legend.position = "none") +
+  ggsave("Output/DelaysEachDay.png")
+
+ReablementService %>%
+  filter(date >= "2018-04-01" & date < "2019-03-01") %>%
+  ggplot(aes(date, Delays)) +
+  geom_line() +
+  geom_smooth(se = FALSE) +
+  facet_wrap(~Locality) +
+  labs(x = "Date",
+       y = "Number of People Delayed in Reablement",
+       title = "Number of people in delayed leaving Reablement each day during 2018/19 in each locality") +
+  theme(panel.background = element_rect(fill = "white"),
+        axis.line = element_line(size = 1, color = "grey40"),
+        legend.position = "none",
+        axis.text.x = element_text(angle = 90)) +
+  ggsave("Output/DelaysEachDayLocality.png")
+
+# Outcomes following Reablement
+Reablement %>%
+  mutate(ReablementOutcome = if_else(ReablementOutcome == "Long Term Care", "ReducedCare", 
+                                     if_else(ReablementOutcome %in% c("Independent", "Customer declined further support", "Informal Support"), "Independent",
+                                             ReablementOutcome))) %>%
+  filter(ReferralOutcome == "Accepted",
+         StartDate >= "2018-04-01",
+         !is.na(EndDate)) %>%
+  group_by(ReablementOutcome) %>%
+  summarise(NumPeople = sum(Referral)) %>%
+  ggplot(aes(ReablementOutcome, NumPeople)) +
+  geom_bar(stat = "identity") +
+  labs(x = "Outcome Following Reablement",
+       y = "Number of People",
+       title = "Number of people leaving Reablement by outcome during 2018/19") +
+  theme(panel.background = element_rect(fill = "white"),
+        axis.line = element_line(size = 1, color = "grey40"),
+        legend.position = "none",
+        axis.text.x = element_text(angle = 90)) +
+  scale_x_discrete(labels = function(x) str_wrap(x, width = 20)) +
+  ggsave("output/ReablementOutcomes.png")
+
+ReableOutcomes <- Reablement %>%
+  mutate(ReablementOutcome = if_else(ReablementOutcome == "Long Term Care", "ReducedCare", 
+                                     if_else(ReablementOutcome %in% c("Independent", "Customer declined further support", "Informal Support"), "Independent",
+                                             ReablementOutcome))) %>%
+  group_by(Locality, EndDate, ReablementOutcome) %>%
+  summarise(NumPeople = sum(Referral, na.rm = TRUE)) %>%
+  spread(key = ReablementOutcome, value = NumPeople) %>%
+  data.frame() %>%
+  mutate(AllOther = rowSums(.[3:4], na.rm = TRUE) + 
+           rowSums(.[7:11], na.rm = TRUE) + 
+           rowSums(.[13], na.rm = TRUE)) %>%
+  mutate(Total = rowSums(.[3:13], na.rm = TRUE),
+         PC_Independent = round(Independent/Total*100, digits = 2),
+         PC_IntoHospital = round(`Into.hospital`/Total*100, digits = 2),
+         PC_ReducedCare = round(ReducedCare/Total*100, digits = 2),
+         PC_Other = round(AllOther/Total*100, digits = 2))
+
+# graph showing percentage of each outcome over time
+ReableOutcomes %>%
+  filter(EndDate >= "2018-04-01" & EndDate <"2019-03-01",
+         !is.na(Locality)) %>%
+  ggplot() + 
+  geom_smooth(aes(EndDate, PC_Independent), color = "blue", se = FALSE) +
+  geom_smooth(aes(EndDate, PC_IntoHospital), color = "red", se = FALSE) +
+  geom_smooth(aes(EndDate, PC_ReducedCare), color = "green", se = FALSE) +
+  geom_smooth(aes(EndDate, PC_Other), color = "black", se = FALSE) +
+  facet_wrap(~Locality)
+  
+ReableOutcomesMonth <- Reablement %>%
+  mutate(ReablementOutcome = if_else(ReablementOutcome == "Long Term Care", "ReducedCare", 
+                                     if_else(ReablementOutcome %in% c("Independent", "Customer declined further support", "Informal Support"), "Independent",
+                                             ReablementOutcome))) %>%
+  group_by(Locality, EndMonthYr, ReablementOutcome) %>%
+  summarise(NumPeople = sum(Referral, na.rm = TRUE)) %>%
+  spread(key = ReablementOutcome, value = NumPeople) %>%
+  data.frame() %>%
+  mutate(AllOther = rowSums(.[3:4], na.rm = TRUE) + 
+           rowSums(.[7:11], na.rm = TRUE) + 
+           rowSums(.[13], na.rm = TRUE)) %>%
+  mutate(Total = rowSums(.[3:13], na.rm = TRUE),
+         PC_Independent = round(Independent/Total*100, digits = 2),
+         PC_IntoHospital = round(`Into.hospital`/Total*100, digits = 2),
+         PC_ReducedCare = round(ReducedCare/Total*100, digits = 2),
+         PC_Other = round(AllOther/Total*100, digits = 2))
+
+ReableOutcomesMonth %>%
+  filter(EndMonthYr >= "2018-04-01" & EndMonthYr <"2019-03-01",
+         !is.na(Locality)) %>%
+  ggplot() +
+  geom_line(aes(EndMonthYr, PC_Independent), color = "blue") +
+  geom_line(aes(EndMonthYr, PC_IntoHospital), color = "red") +
+  geom_line(aes(EndMonthYr, PC_ReducedCare), color = "green") +
+  geom_line(aes(EndMonthYr, PC_Other), color = "black") +
+  geom_smooth(aes(EndMonthYr, PC_Independent), method = "lm", se = FALSE, color = "blue", linetype = "dotted") +
+  geom_smooth(aes(EndMonthYr, PC_IntoHospital), method = "lm", se = FALSE, color = "red", linetype = "dotted") +
+  geom_smooth(aes(EndMonthYr, PC_ReducedCare), method = "lm", se = FALSE, color = "green", linetype = "dotted") +
+  geom_smooth(aes(EndMonthYr, PC_Other), method = "lm", se = FALSE, color = "black", linetype = "dotted") +
+  facet_wrap(~Locality) +
+  labs(x = "End of Reablement Month",
+       y = "Percentage of People",
+       title = "Percentage of people leaving Reablement by outcome during 2018/19 \nin each locality") +
+  theme(panel.background = element_rect(fill = "white"),
+        axis.line = element_line(size = 1, color = "grey40"),
+        legend.position = "none") +
+  ggsave("Output/PcentReableOutcomeLocality.png")
+
+ReableOutcomesMonth %>%
+  filter(EndMonthYr >= "2018-04-01" & EndMonthYr <"2019-03-01",
+         !is.na(Locality)) %>%
+  ggplot() +
+  geom_line(aes(EndMonthYr, Independent), color = "blue") +
+  geom_line(aes(EndMonthYr, Into.hospital), color = "red") +
+  geom_line(aes(EndMonthYr, ReducedCare), color = "green") +
+  geom_line(aes(EndMonthYr, AllOther), color = "black") +
+  geom_smooth(aes(EndMonthYr, Independent), method = "lm", se = FALSE, color = "blue", linetype = "dotted") +
+  geom_smooth(aes(EndMonthYr, Into.hospital), method = "lm", se = FALSE, color = "red", linetype = "dotted") +
+  geom_smooth(aes(EndMonthYr, ReducedCare), method = "lm", se = FALSE, color = "green", linetype = "dotted") +
+  geom_smooth(aes(EndMonthYr, AllOther), method = "lm", se = FALSE, color = "black", linetype = "dotted") +
+  facet_wrap(~Locality) +
+  labs(x = "End of Reablement Month",
+       y = "Number of People",
+       title = "Number of people leaving Reablement by outcome during 2018/19 \nin each locality") +
+  theme(panel.background = element_rect(fill = "white"),
+        axis.line = element_line(size = 1, color = "grey40"),
+        legend.position = "none") +
+  ggsave("Output/ReableOutcomeLocality.png")
