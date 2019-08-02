@@ -1,0 +1,24 @@
+# Homecare hours projections by neighbourhood based on number of commissioned hours each month
+# projections to inform the homecare guarenteed hours to providers
+
+.libPaths("U:/R/Library")
+
+library(tidyverse)
+library(lubridate)
+
+#setwd("G:/CEX/Planning/Planning Studies/studies/Community Budgets Phase 2/PSR/Health Social Care Reform/Demand Modelling/Homecare Demand Modelling")
+
+
+HomecareHours <- read_csv("Homecare Drivers/HomecareHoursOriginal.csv",
+                          col_types = cols(
+                            `Element Detail Start Date` = col_date("%d/%m/%Y"),
+                            `Element End Date` = col_date("%d/%m/%Y")))
+
+
+# need to be able to caclutate total hours of homecare each month by neighbourhood (and ward) 
+# need to re-run that regularly
+# redistribute not matched data across neighbourhoods / wards
+# need to include budget savings
+# need forecast model in R - run to give similar outputs as excel model (or improved?)
+# need output tables - model output, model output - savings, model output * 60%
+# output to show model output against projections
