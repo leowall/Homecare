@@ -1,0 +1,237 @@
+# 
+# Home care hours - changes in hours from new starters, people leaving and people changing their hours
+.libPaths("U:/R/Library")
+
+library(tidyverse)
+library(lubridate)
+
+setwd("G:/CEX/Planning/Planning Studies/studies/Community Budgets Phase 2/PSR/Health Social Care Reform/Demand Modelling/Homecare Demand Modelling")
+
+
+HomecareHours <- read_csv("Homecare Drivers/HomecareHoursOriginal.csv",
+                          col_types = cols(
+                            `Element Detail Start Date` = col_date("%d/%m/%Y"),
+                            `Element End Date` = col_date("%d/%m/%Y")))
+                            
+
+ReablementCohort <- read_csv("Homecare Drivers/Reablement Data Apr17 - Latest.csv",
+                             col_types = cols(
+                               Date = col_date("%d/%m/%Y"),
+                               `Hours per week at start of service` = col_double(),
+                               `No. of visits per week at start of service` = col_double(),
+                               `Start Date` = col_date("%d/%m/%Y"),
+                               `End Date` = col_date("%d/%m/%Y"),
+                               `Hours per week  for long term care (end of service)` = col_double(),
+                               `No. of visits per week for long term care (end of service)` = col_double(),
+                               `Days     HIDE` = col_double(),
+                               Days = col_double(),
+                               `Delayed Days` = col_double(),
+                               `Route of access 1` = col_character(),
+                               `Route of Access 2` = col_character(),
+                               `Modified End Date` = col_date("%d/%m/%Y"),
+                               `Delay Start`  = col_date("%d/%m/%Y")
+                             ))
+
+CarePackages <- read_csv("Data/05_LLLB_Care_Packages_NoDateFilter_20190612.csv",
+                         col_types = cols(
+                           `Earliest Homecare Service Start Date` = col_date("%d/%m/%Y"),
+                           `Service End Date` = col_date("%d/%m/%Y"),
+                           `Service Start Date` = col_date("%d/%m/%Y"),
+                           `Element End Date` = col_date("%d/%m/%Y"),
+                           `Element Start Date` = col_date("%d/%m/%Y"),
+                           `Admission Date (Supported residents)` = col_date("%d/%m/%Y"),
+                           `Discharge Date (Supported residents)` = col_date("%d/%m/%Y")
+                         ))
+
+
+# Add MiCare number to Homecare hours table
+HCHours <- HomecareHours %>%
+  left_join(CarePackages, by = c("Element ID" = "Element ID")) %>%
+  select(MiCareID = `MiCARE Number.y`, ElementID = `Element ID`, ServiceDescription = `Service Description`,
+         SupplierName = `Supplier Name.x`, Period, VisitsPerPeriod = `Visits per period`, 
+         PlannedHoursPerVisit = `Planned Hours Per Visit`, PlannedHoursPerVisitType = `Planned Hours Per Visit Type`,
+         ElementDetailStartDate = `Element Detail Start Date`, ElementEndDate = `Element End Date.x`, 
+         EarliestHomecareStartDate = `Earliest Homecare Service Start Date`) %>%
+  arrange(MiCareID, ElementDetailStartDate)
+
+# Reablement tables
+# Reablement episodes for chronology table
+ReablementEpisodes <- ReablementCohort %>%
+  select(MiCareID = `MiCare ID`, StartDate = `Start Date`, EndDate = `End Date`) %>%
+  mutate(ElementID= NA,
+         ServiceDescription = "Reablement")
+
+# All Reablement referrals with dates, outcomes of referral and reablement
+ReablementReferrals <- ReablementCohort %>%
+  select(MiCareID = `MiCare ID`, ReferralDate = Date, ReferralSource = Team, 
+         ReferralOutcome = `Outcome of referral STREAMLINED`, StartDate = `Start Date`, EndDate = `End Date`, 
+         ReablementOutcome = `Outcome (End of Reablement)`) %>%
+  mutate(ServiceDescription = "Reablement",
+         ReablementDays = EndDate - StartDate) %>%
+  arrange(MiCareID, ReferralDate)
+
+ReablementPeople <- ReablementReferrals %>%
+  filter(!is.na(MiCareID)) %>%
+  group_by(MiCareID, ReferralOutcome) %>%
+  summarise(NumReferrals = n()) %>%
+  spread(key = ReferralOutcome, value = NumReferrals) %>%
+  ungroup() %>%
+  mutate_all(~replace(., is.na(.), 0)) %>%
+  mutate(TotalReferrals = rowSums(.[2:11], na.rm = TRUE))
+
+summary(ReablementPeople)
+
+ReableAcceptd <- ReablementReferrals %>%
+  filter(ReferralOutcome == "Accepted") %>%
+  group_by(MiCareID) %>%
+  mutate(StartDateRank = order(order(StartDate, decreasing = FALSE))) %>%
+  ungroup() %>%
+  select(MiCareID, StartDate, StartDateRank) %>%
+  spread(key = StartDateRank, value = StartDate) %>%
+  write_csv("Data/ReableStartDates.csv")
+View(ReableAcceptd)
+
+ReableRange <- ReablementReferrals %>%
+  filter(ReferralOutcome == "Accepted") %>%
+  group_by(MiCareID) %>%
+  summarise(EarliestReable = min(StartDate), 
+            LatestReable = max(StartDate),
+            NumAccepted = n()) %>%
+  ungroup() 
+
+FirstReable <- ReablementReferrals %>%
+  filter(ReferralOutcome == "Accepted") %>%
+  group_by(MiCareID) %>%
+  summarise(EarliestStart = min(StartDate)) %>%
+  left_join(ReablementReferrals, by = c("MiCareID" = "MiCareID", "EarliestStart" = "StartDate")) %>%
+  select(MiCareID, EarliestStart, EarliestReableDays = ReablementDays)
+
+MostRecentReable <- ReablementReferrals %>%
+  filter(ReferralOutcome == "Accepted") %>%
+  group_by(MiCareID) %>%
+  summarise(LatestStart = max(StartDate)) %>%
+  left_join(ReablementReferrals, by = c("MiCareID" = "MiCareID", "LatestStart" = "StartDate")) %>%
+  select(MiCareID, LatestStart, LatestReableDays = ReablementDays)
+  
+
+# identify Homecare episodes that are immediately preceded by Reablement - so can assume referral to homecare
+# is effectively from Reablement
+Chronology <- HCHours %>%
+  select(MiCareID, ElementID, ServiceDescription, StartDate = ElementDetailStartDate, EndDate = ElementEndDate) %>%
+  union_all(ReablementEpisodes) %>%
+  arrange(MiCareID, StartDate) %>%
+  mutate(DiffDays = difftime(StartDate, lag(EndDate), units = "days")) %>%
+  mutate(service = if_else(ServiceDescription == "Home Care", 1, 
+                           if_else(ServiceDescription == "Reablement", 2, 3))) %>%
+  mutate(ReablementSource = if_else(MiCareID == lag(MiCareID) & service != lag(service) & between(as.double(DiffDays), -5, 5),
+                                    1, 0))
+           
+# add flag to HCHours table to show homecare episodes that were preceeding by Reablement  
+ReableHomecare <- Chronology %>%
+  filter(ReablementSource == 1)
+
+HCHours <- HCHours %>%
+  left_join(ReableHomecare, by = c("ElementID" = "ElementID")) %>%
+  select(MiCareID = MiCareID.x, ElementID, ServiceDescription = ServiceDescription.x, SupplierName, Period, 
+         VisitsPerPeriod, PlannedHoursPerVisit, PlannedHoursPerVisitType, ElementDetailStartDate, ElementEndDate, 
+         EarliestHomecareStartDate, ReablementSource) %>%
+  replace_na(list(ReablementSource = 0))
+
+
+PeopleReableHC <- HCHours %>%
+  group_by(MiCareID) %>%
+  summarise(ReableHC = sum(ReablementSource)) %>%
+  filter(ReableHC != 0)
+
+# how many people have homecare, how many current have homecare, how many have come through reablement?
+HomecarePeople <- HCHours %>%
+  mutate(CurrentHC = if_else(is.na(ElementEndDate),1,0)) %>%
+  group_by(MiCareID) %>%
+  summarise(HCEpisodes = n(),
+            ReableHC = sum(ReablementSource),
+            Current = sum(CurrentHC)) 
+  
+# Summarised Homecare Hours table - for calculation of number or people and hours of starters, leavers and changers
+
+HCHours <- HCHours %>%
+  group_by(MiCareID) %>%
+  mutate(ModifiedEndDate = if_else(is.na(ElementEndDate), today(), ElementEndDate)) %>%
+  mutate(StartDateRank = order(order(ElementDetailStartDate, decreasing = FALSE)),
+	   EndDateRank = order(order(ModifiedEndDate, decreasing = TRUE)),
+	   HomecareStart = if_else(between(EarliestHomecareStartDate - ElementDetailStartDate, -2, 2), 1, 0),
+	   CurrentPackage = if_else(is.na(ElementEndDate), 1, 0)) %>%
+  ungroup()
+#View(HCHours)
+
+# identify homecare packages that are double cover based on same detaisl in group-by columns
+DoubleCoverHC <- HCHours %>%
+  group_by(MiCareID, Period, ElementDetailStartDate, ElementEndDate, VisitsPerPeriod, PlannedHoursPerVisit) %>%
+  summarise(CoverType = n(),
+            VisitHours = sum(PlannedHoursPerVisit, na.rm = TRUE)) %>%
+  mutate(DoubleCover = if_else(CoverType > 1, 1, 0),
+         PeriodWeeks = if_else(Period == "Fortnightly", 2, 
+                               if_else(Period == "Every 4 weeks", 4, 
+                                       if_else(Period == "Weekly", 1, 0))),
+         WeeklyHours = (VisitHours * VisitsPerPeriod) / PeriodWeeks, 
+         StartMonth = floor_date(ElementDetailStartDate, "month"),
+         StartWeek = floor_date(ElementDetailStartDate, "week")) %>%
+  filter(DoubleCover == 1)
+
+
+PeopleHC <- HCHours %>%
+  select(MiCareID, ServiceDescription, Period, VisitsPerPeriod, PlannedHoursPerVisit, PlannedHoursPerVisitType,
+         ElementDetailStartDate, ElementEndDate, EarliestHomecareStartDate) %>%
+  group_by(MiCareID, EarliestHomecareStartDate, ElementDetailStartDate, ElementEndDate, Period) %>%
+  summarise(TotalVisits = sum(VisitsPerPeriod, na.rm = TRUE),
+            TotalHours = sum(PlannedHoursPerVisit, na.rm = TRUE),
+            TotalHoursPerType = sum(PlannedHoursPerVisitType, na.rm = TRUE)) %>%
+  mutate(HomecareStart = if_else(between(EarliestHomecareStartDate - ElementDetailStartDate, -2, 2), 1, 0),
+         PackageChange = if_else(!between(EarliestHomecareStartDate - ElementDetailStartDate, -2, 2), 1, 0),
+         CurrentPackage = if_else(is.na(ElementEndDate), 1, 0)) %>%
+  ungroup() %>%
+  group_by(MiCareID) %>%
+  mutate(ModifiedEndDate = if_else(is.na(ElementEndDate), today(), ElementEndDate),
+         EndDateRank = order(order(ModifiedEndDate, decreasing = TRUE))) %>%
+  ungroup() %>%
+  mutate(HomecareEnd = if_else(EndDateRank == 1 & !is.na(ElementEndDate), 1, 0),
+         StartMonth = floor_date(ElementDetailStartDate, "month"),
+         EndMonth = floor_date(ModifiedEndDate, "month")) %>%
+  left_join(DoubleCoverHC, by=c("MiCareID" = "MiCareID", "ElementDetailStartDate" = "ElementDetailStartDate")) %>%
+  select(MiCareID, Period = Period.x, ElementDetailStartDate, ElementEndDate = ElementEndDate.x, 
+         EarliestHomecareStartDate, TotalVisits, TotalHours, TotalHoursPerType, 
+         HomecareStart, PackageChange, CurrentPackage, ModifiedEndDate, EndDateRank, HomecareEnd, 
+         StartMonth = StartMonth.x, EndMonth, DoubleCover) %>%
+  replace_na(list(DoubleCover = 0)) %>%
+  left_join(FirstReable, by = c("MiCareID" = "MiCareID")) %>%
+  left_join(MostRecentReable, by = c("MiCareID" = "MiCareID"))
+View(PeopleHC)
+
+HCStarts <- PeopleHC %>%
+  filter(HomecareStart == 1) %>%
+  group_by(StartMonth) %>%
+  summarise(TotalWeeklyHours = sum(TotalHours, na.rm = TRUE))
+
+
+# identify starters, leavers and changers
+# identify hours of starters, leavers and changers
+# identify number of people starting, leaving, changing
+# compare people going through Reablement to others - is there an impact on initial homecare hours? Is there
+# a difference in time spent at initial level of homecare before increase?
+# How can this data be used to inform homecare forecasting?  
+
+
+# Peoples Homecare start and end dates
+PeopleStartEnd <- HCHours %>%
+  group_by(MiCareID) %>%
+  summarise(StartDate = min(EarliestHomecareStartDate),
+            EndDate = max(ElementEndDate)) %>%
+  mutate(StartMonth = floor_date(StartDate, "month"),
+         EndMonth = floor_date(EndDate, "month")) %>%
+  write_csv("Hours/PeopleStartEnd.csv")
+# data range of start and end dates for homecare
+PeopleStartEnd %>%
+  ggplot() +
+  geom_bar(aes(StartMonth, fill = "blue")) +
+  geom_bar(aes(EndMonth, fill = "green"))
+
+
