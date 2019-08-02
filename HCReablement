@@ -1,0 +1,338 @@
+# script to explore homecare data - where are the increases in hours coming from?
+# Is the increase being drivne by new or existing people
+# Is the increase being driven by double cover
+
+# Next steps to develop
+# need to look at the diference between hours at start of homecare and then the change at the start
+# of each new element of homecare - this should take out the inflation of people moving from new to
+# existing users. Might need to rank homecare elements and find difference in hours between each element
+
+
+
+#.libPaths("U:/R/library")
+
+#library(tidyverse)
+#library(lubridate)
+#library(readxl)
+#library(plotly)
+
+HCHours <- read_csv("Data/HomecareHours.csv")
+CarePackages <- read_xlsx("G:/CEX/Planning/Planning Studies/studies/Community Budgets Phase 2/PSR/Health Social Care Reform/Evaluation/Reablement/Data/05_LLLB_Care_Packages.xlsx")
+
+CarePackages <- CarePackages %>%
+  mutate(MiCareID = as.integer(`MiCARE Number`),
+         StartRecord = if_else(`Earliest Homecare Service Start Date` == `Service Start Date`, 1, 0))
+
+
+# table of unique people with their earliest Homecare Start date
+UniqueHCStart <- CarePackages %>%
+  filter(`Service Type (Package of Care)` %in% c("Home Care", "Home Care.", "Intensive Homecare", "Intensive Homecare."),
+         StartRecord == 1) %>%
+  group_by(`MiCARE Number`, MiCareID, `Earliest Homecare Service Start Date`) %>%
+  summarise(Records = n(),
+            HomecareHours = sum(`Homecare Contact Hours per Week`, na.rm = TRUE)) %>%
+  rename(HomecareStartDate = `Earliest Homecare Service Start Date`) %>%
+  filter(!is.na(HomecareStartDate)) %>%
+  arrange(MiCareID) %>%
+  mutate(StartWeek = floor_date(HomecareStartDate, "week")) %>%
+  left_join(CarePackages, by = c("MiCARE Number" = "MiCARE Number", "HomecareStartDate" = "Element Start Date")) %>%
+  select(MiCareID = MiCareID.x, StartWeek, HomecareStartDate, `Homecare Contact Hours per Week`, `Planned Homecare Visits per Week`, HomecareHours)
+
+UniqueHCStart %>%
+group_by(MiCareID) %>%
+summarise(Records = n()) %>%
+arrange(desc(Records))
+
+UniqueHCStart %>%
+  filter(StartWeek >= "2016-04-01") %>%
+  group_by(StartWeek) %>%
+  summarise(Starters = n()) %>%
+  ggplot(aes(StartWeek, Starters)) +
+  geom_line() +
+  geom_smooth(alpha = 0.5, linetype = "dotted", se = FALSE) +
+  theme(axis.text.x = element_text(angle = 90),
+        panel.background = element_rect(fill = "white"),
+        axis.line = element_line(size = 1, color = "grey40"),
+        legend.position = "bottom",
+        legend.background = element_rect(fill = "white")) +
+  coord_cartesian(ylim = c(0,60)) +
+  labs(y = "Number of New Starters",
+       title = "Total Number of People Starting Homecare Each Week") +
+  ggsave("Output/WeeklyHomecareStarters.png")
+
+UniqueHCStart %>%
+  filter(StartWeek >= "2016-04-01") %>%
+  group_by(StartWeek) %>%
+  summarise(Hours = sum(HomecareHours, na.rm = TRUE)) %>%
+  ggplot(aes(StartWeek, Hours)) +
+  geom_line() +
+  geom_smooth(alpha = 0.5, linetype = "dotted", se = FALSE) +
+  theme(axis.text.x = element_text(angle = 90),
+        panel.background = element_rect(fill = "white"),
+        axis.line = element_line(size = 1, color = "grey40"),
+        legend.position = "bottom",
+        legend.background = element_rect(fill = "white")) +
+  coord_cartesian(ylim = c(0,600)) +
+  labs(y = "Number of Homecare Hours",
+       title = "Total Number of Homecare Hours for People Starting Homecare Each Week") +
+  ggsave("Output/WeeklyHomecareStartersHours.png")
+
+UniqueCurrentHC <- CarePackages %>%
+  filter(`Service Type (Package of Care)` %in% c("Home Care", "Home Care.", "Intensive Homecare", "Intensive Homecare."),
+         is.na(`Service End Date`)) 
+
+HC1819 <- CarePackages %>%
+  mutate(EndDate = if_else(is.na(`Service End Date`), today(), as.Date(`Service End Date`))) %>%
+  filter(`Service Type (Package of Care)` %in% c("Home Care", "Home Care.", "Intensive Homecare", "Intensive Homecare."),
+         `Earliest Homecare Service Start Date` < "2019-04-01" & EndDate >= "2018-04-01") %>%
+  mutate(FYrStarter = if_else(`Earliest Homecare Service Start Date` >= "2018-04-01", 1, 0)) %>%
+  group_by(MiCareID, `Earliest Homecare Service Start Date`) %>%
+  summarise(NewStarter = mean(FYrStarter, na.rm = TRUE))
+
+# current number of homecare hours
+CarePackages %>%
+  filter(`Service Type (Package of Care)` %in% c("Home Care", "Home Care.", "Intensive Homecare", "Intensive Homecare."),
+         is.na(`Service End Date`)) %>%
+  summarise(People = n(),
+            Hours = sum(`Homecare Contact Hours per Week`, na.rm = TRUE))
+
+
+# how do hours of homecare differ for those on single and double cover?
+# identify people with double cover homecare - those with more than one record
+HCCoverType <- HCHours %>%
+  group_by(MiCareID, `MiCARE Number`, Period, `Element Detail Start Date`, `Element End Date`, 
+           `Visits per period`, `Planned Hours Per Visit`) %>%
+  summarise(CoverType = n(),
+            VisitHours = sum(`Planned Hours Per Visit`, na.rm = TRUE)) %>%
+  mutate(PeriodWeeks = if_else(Period == "Fortnightly", 2, 
+                               if_else(Period == "Every 4 weeks", 4, 
+                                       if_else(Period == "Weekly", 1, 0))),
+         WeeklyHours = (VisitHours * `Visits per period`) / PeriodWeeks, 
+         StartMonth = floor_date(`Element Detail Start Date`, "month"),
+         StartWeek = floor_date(`Element Detail Start Date`, "week")) %>%
+  left_join(UniqueHCStart, by = c("MiCareID" = "MiCareID", "Element Detail Start Date" = "HomecareStartDate")) %>%
+  select(-`MiCARE Number.y`, -StartWeek.y) %>%
+  rename(StartWeek = StartWeek.x, `MiCARE Number` = `MiCARE Number.x`) %>%
+  mutate(RecordType = if_else(!is.na(HomecareHours), "Starter", "Existing"))
+
+
+# Plotting starters by cover type
+HCHoursByCover <- HCCoverType %>%
+  filter(StartWeek >= "2016-04-01") %>%
+  group_by(StartWeek, CoverType) %>%
+  summarise(THours = sum(WeeklyHours, na.rm = TRUE)) %>%
+  mutate(StartMonth = floor_date(StartWeek, "week"))
+
+ggplot() +
+  geom_line(data = filter(HCHoursByCover, CoverType == 1), aes(StartWeek, THours), colour = "blue", alpha = 0.5) + 
+  geom_line(data = filter(HCHoursByCover, CoverType == 2), aes(StartWeek, THours), colour = "black", alpha = 0.5) +
+  geom_smooth(data = filter(HCHoursByCover, CoverType == 1), aes(StartWeek, THours), colour = "blue") + 
+  geom_smooth(data = filter(HCHoursByCover, CoverType == 2), aes(StartWeek, THours), colour = "black") 
+
+HCHoursStarters <- HCCoverType %>%
+  left_join(UniqueHCStart, by = c("MiCareID" = "MiCareID")) %>%
+  mutate(Starter = if_else(as.Date(HomecareStartDate) == as.Date(`Element Detail Start Date`), 1, 0)) %>%
+  filter(Starter == 1)
+
+HCStartGrouped <- HCHoursStarters %>%
+  filter(StartWeek >= "2017-04-01") %>%
+  group_by(StartMonth) %>%
+  summarise(THours = sum(WeeklyHours, na.rm = TRUE),
+            People = n()) %>%
+  ggplot(aes(StartMonth, THours)) +
+  geom_line()
+
+# need to calculate hours of homecare each month - total hours per month
+# is the increase in homecare hours coming from new starters of existing uers?
+
+SingleCoverHC <- HCCoverType %>%
+  filter(CoverType == 1) %>%
+  mutate(StartDate = as.Date(`Element Detail Start Date`),
+         EndDate = if_else(is.na(`Element End Date`),as.Date(today()),as.Date(`Element End Date`)))
+
+DoubleCoverHC <- HCCoverType %>%
+  filter(CoverType != 1) %>%
+  mutate(StartDate = as.Date(`Element Detail Start Date`),
+         EndDate = if_else(is.na(`Element End Date`),as.Date(today()),as.Date(`Element End Date`)))
+
+SHCWeeks <- data.frame(date = seq(as.Date("2016-04-01"), as.Date(today()), "weeks"), CoverType = "Single")
+DHCWeeks <- data.frame(date = seq(as.Date("2016-04-01"), as.Date(today()), "weeks"), CoverType = "Double")
+
+SingleCoverHC$interval <- interval(SingleCoverHC$StartDate, SingleCoverHC$EndDate)
+DoubleCoverHC$interval <- interval(DoubleCoverHC$StartDate, DoubleCoverHC$EndDate)
+
+SingleCoverWeekly <- do.call(rbind, lapply(SHCWeeks$date, function(x){
+  index <- x %within% SingleCoverHC$interval;
+  list(Hours = sum((SingleCoverHC$WeeklyHours)[index], na.rm = TRUE))}))
+SingleCoverHours <- cbind(SHCWeeks, unlist(SingleCoverWeekly)) %>% rename(Hours = `unlist(SingleCoverWeekly)`)  
+
+DoubleCoverWeekly <- do.call(rbind, lapply(DHCWeeks$date, function(x){
+  index <- x %within% DoubleCoverHC$interval;
+  list(Hours = sum((DoubleCoverHC$WeeklyHours)[index], na.rm = TRUE))}))
+DoubleCoverHours <- cbind(DHCWeeks, unlist(DoubleCoverWeekly)) %>% rename(Hours = `unlist(DoubleCoverWeekly)`)  
+
+HomecareHours <- SingleCoverHours %>%
+  union_all(DoubleCoverHours) %>%
+  mutate(Month = floor_date(date, "month"))
+
+HomecareHours %>%
+  group_by(date) %>%
+  summarise(THours = sum(Hours, na.rm = TRUE)) %>%
+  ggplot(aes(date, THours)) +
+  geom_line() + 
+  geom_smooth(alpha = 0.5, linetype = "dotted", se = FALSE) +
+  theme(axis.text.x = element_text(angle = 90),
+      panel.background = element_rect(fill = "white"),
+      axis.line = element_line(size = 1, color = "grey40"),
+      legend.position = "bottom",
+      legend.background = element_rect(fill = "white")) +
+  coord_cartesian(ylim = c(0,27000)) +
+  labs(y = "Number of Hours",
+       title = "Total Number of Homecare Hours Each Week") +
+  ggsave("Output/WeeklyHomecareHours.png")
+  
+# plot_ly(x = ~date, y = ~THours, type = "scatter", mode = "lines")
+
+HomecareHours %>%
+  ggplot(aes(date, Hours, colour = CoverType)) +
+  geom_line(position = "stack") +
+  theme(axis.text.x = element_text(angle = 90),
+        panel.background = element_rect(fill = "white"),
+        axis.line = element_line(size = 1, color = "grey40"),
+        legend.position = "bottom",
+        legend.background = element_rect(fill = "white")) +
+  coord_cartesian(ylim = c(0,27000)) +
+  labs(y = "Number of Hours",
+       title = "Total Number of Homecare Hours Each Week by Cover Type") +
+  ggsave("Output/WeeklyHomecareHoursbyCover.png")
+
+WeeklyHours <- HomecareHours %>%
+  group_by(date) %>%
+  summarise(Total = sum(Hours, na.rm = TRUE))
+
+MonthlyHours <- HomecareHours %>%
+  group_by(Month) %>%
+  summarise(Total = sum(Hours, na.rm = TRUE))
+
+HCHoursStart <- CarePackages %>%
+  mutate(HCStart = if_else(`Earliest Homecare Service Start Date` == `Element Start Date`, 1, 0),
+         MiCareID = as.integer(`MiCARE Number`)) %>%
+  filter(HCStart == 1) %>%
+  mutate(StartWeek = floor_date(`Earliest Homecare Service Start Date`, "week"))
+
+WeeklyHoursStarters <- HCCoverType %>%
+  left_join(HCHoursStart, by = c("MiCareID" = "MiCareID", "Element Detail Start Date" = "Earliest Homecare Service Start Date")) %>%
+  mutate(NewStarter = if_else(!is.na(`Service Type (Package of Care)`), 0, 1)) %>%
+  select(MiCareID, Period, `Element Detail Start Date`, `Element End Date.x`, 
+         `Visits per period`, `Planned Hours Per Visit`, CoverType, VisitHours, PeriodWeeks, 
+         WeeklyHours, StartMonth, StartWeek = StartWeek.x, NewStarter)
+
+
+# are homecare hours increases being driven by new or existing customers?
+StarterHC <- HCCoverType %>%
+  filter(RecordType == "Starter") %>%
+  mutate(StartDate = as.Date(`Element Detail Start Date`),
+         EndDate = if_else(is.na(`Element End Date`),as.Date(today()),as.Date(`Element End Date`)))
+
+ExistingHC <- HCCoverType %>%
+  filter(RecordType == "Existing") %>%
+  mutate(StartDate = as.Date(`Element Detail Start Date`),
+         EndDate = if_else(is.na(`Element End Date`),as.Date(today()),as.Date(`Element End Date`)))
+
+NHCWeeks <- data.frame(date = seq(as.Date("2016-04-01"), as.Date(today()), "weeks"), RecordType = "Starter")
+EHCWeeks <- data.frame(date = seq(as.Date("2016-04-01"), as.Date(today()), "weeks"), RecordType = "Existing")
+
+StarterHC$interval <- interval(StarterHC$StartDate, StarterHC$EndDate)
+ExistingHC$interval <- interval(ExistingHC$StartDate, ExistingHC$EndDate)
+
+StartersWeekly <- do.call(rbind, lapply(NHCWeeks$date, function(x){
+  index <- x %within% StarterHC$interval;
+  list(Hours = sum((StarterHC$WeeklyHours)[index], na.rm = TRUE))}))
+StarterHours <- cbind(NHCWeeks, unlist(StartersWeekly)) %>% rename(Hours = `unlist(StartersWeekly)`)  
+
+ExistingWeekly <- do.call(rbind, lapply(EHCWeeks$date, function(x){
+  index <- x %within% ExistingHC$interval;
+  list(Hours = sum((ExistingHC$WeeklyHours)[index], na.rm = TRUE))}))
+ExistingHours <- cbind(EHCWeeks, unlist(ExistingWeekly)) %>% rename(Hours = `unlist(ExistingWeekly)`)  
+
+UsersHCHours <- StarterHours %>%
+  union_all(ExistingHours) %>%
+  mutate(Month = floor_date(date, "month"))
+
+UsersHCHours %>%
+  ggplot(aes(date, Hours, colour = RecordType)) +
+  geom_line() +
+  theme(axis.text.x = element_text(angle = 90),
+        panel.background = element_rect(fill = "white"),
+        axis.line = element_line(size = 1, color = "grey40"),
+        legend.position = "bottom",
+        legend.background = element_rect(fill = "white")) +
+  coord_cartesian(ylim = c(0,27000)) +
+  labs(y = "Number of Hours",
+       title = "Total Number of Homecare Hours Each Week by Type of Client") +
+  ggsave("Output/WeeklyHomecareHoursbyClient.png")
+
+
+
+
+
+
+# another method currently doesn't work - need to count new starters then subtract from total?
+HCCoverTypeStarter <- HCCoverType %>%
+  left_join(HC1819, by = c("MiCareID" = "MiCareID")) %>%
+  filter(!is.na(NewStarter))
+
+
+NewStarters1 <- HCCoverTypeStarter %>%
+  filter(NewStarter == 1) %>%
+  mutate(StartDate = as.Date(`Element Detail Start Date`),
+         EndDate = if_else(is.na(`Element End Date`),as.Date(today()),as.Date(`Element End Date`)))
+
+Existing1 <- HCCoverTypeStarter %>%
+  filter(NewStarter == 0) %>%
+  mutate(StartDate = as.Date(`Element Detail Start Date`),
+         EndDate = if_else(is.na(`Element End Date`),as.Date(today()),as.Date(`Element End Date`)))
+
+NHCWeeks1 <- data.frame(date = seq(as.Date("2018-04-01"), as.Date(today()), "weeks"), Starter = "New")
+EHCWeeks1 <- data.frame(date = seq(as.Date("2018-04-01"), as.Date(today()), "weeks"), Starter = "Existing")
+
+NewStarters1$interval <- interval(NewStarters1$StartDate, NewStarters1$EndDate)
+Existing1$interval <- interval(Existing1$StartDate, Existing1$EndDate)
+
+NewStartersWeekly <- do.call(rbind, lapply(NHCWeeks1$date, function(x){
+  index <- x %within% NewStarters1$interval;
+  list(Hours = sum((NewStarters1$WeeklyHours)[index], na.rm = TRUE))}))
+NewStartersHours <- cbind(NHCWeeks1, unlist(NewStartersWeekly)) %>% rename(Hours = `unlist(NewStartersWeekly)`)  
+
+ExistingWeekly1 <- do.call(rbind, lapply(EHCWeeks1$date, function(x){
+  index <- x %within% Existing1$interval;
+  list(Hours = sum((Existing1$WeeklyHours)[index], na.rm = TRUE))}))
+ExistingHours1 <- cbind(EHCWeeks1, unlist(ExistingWeekly1)) %>% rename(Hours = `unlist(ExistingWeekly1)`)  
+
+HCAllHours <- NewStartersHours %>%
+  union_all(ExistingHours1) %>%
+  mutate(Month = floor_date(date, "month"))
+
+HCAllHours %>%
+  filter(date <= "2019-02-01") %>%
+  ggplot(aes(date, Hours, colour = Starter)) +
+  geom_line() +
+  geom_smooth()
+
+# need to look at the diference between hours at start of homecare and then the change at the start
+# of each new element of homecare - this should take out the inflation of people moving from new to
+# existing users. Might need to rank homecare elements and find difference in hours between each element
+
+HCRanked <- HCCoverType %>%
+  group_by(MiCareID, `MiCARE Number`, Period, `Element Detail Start Date`, `Element End Date`) %>%
+  summarise(NumberOfVisits = sum(`Visits per period`, na.rm = TRUE),
+            NumberOfHours = sum(`Planned Hours Per Visit`, na.rm = TRUE),
+            NumberWeeklyHours = sum(WeeklyHours, na.rm = TRUE)) %>%
+  ungroup() %>%
+  group_by(MiCareID) %>%
+  mutate(HCRank = order(order(`Element Detail Start Date`, decreasing = FALSE))) %>%
+  mutate(StartWeek = floor_date(`Element Detail Start Date`, "week"),
+         ClientType = if_else(HCRank == 1, "Starter", "Existing")) %>%
+  write_csv("Output/HCPeopleHoursNewExisting.csv")
+
+
