@@ -1,24 +1,163 @@
 # Homecare hours projections by neighbourhood based on number of commissioned hours each month
 # projections to inform the homecare guarenteed hours to providers
 
-.libPaths("U:/R/Library")
-
-library(tidyverse)
-library(lubridate)
-
-#setwd("G:/CEX/Planning/Planning Studies/studies/Community Budgets Phase 2/PSR/Health Social Care Reform/Demand Modelling/Homecare Demand Modelling")
-
-
-HomecareHours <- read_csv("Homecare Drivers/HomecareHoursOriginal.csv",
-                          col_types = cols(
-                            `Element Detail Start Date` = col_date("%d/%m/%Y"),
-                            `Element End Date` = col_date("%d/%m/%Y")))
-
-
-# need to be able to caclutate total hours of homecare each month by neighbourhood (and ward) 
+# need to be able to caclutate total hours of homecare each month by neighbourhood (and ward) DONE
 # need to re-run that regularly
 # redistribute not matched data across neighbourhoods / wards
 # need to include budget savings
 # need forecast model in R - run to give similar outputs as excel model (or improved?)
 # need output tables - model output, model output - savings, model output * 60%
 # output to show model output against projections
+
+
+#.libPaths("U:/R/Library")
+
+library(tidyverse)
+library(RODBC)
+library(lubridate)
+
+#setwd("G:/CEX/Planning/Planning Studies/studies/Community Budgets Phase 2/PSR/Health Social Care Reform/Demand Modelling/Homecare Demand Modelling")
+
+# connection to Data Warehouse
+con <- odbcConnect("RLLLB")
+
+# Load Tables into R from H&SC SQL Data Warehouse
+HomecareHours <- sqlQuery(con,
+"SELECT *
+FROM [dbo].[mccHomeCareHours]")
+
+
+#HomecareHours <- read_csv("Homecare Drivers/HomecareHoursOriginal.csv",
+#                          col_types = cols(
+#                            `Element Detail Start Date` = col_date("%d/%m/%Y"),
+#                            `Element End Date` = col_date("%d/%m/%Y")))
+
+HomecareHours <- read_csv("C:/RProjects/Homecare/Data/HomecareHours.csv",
+                          col_types = cols(
+                            ElementDetailStartDate = col_date("%d/%m/%Y"),
+                            ElementEndDate = col_date("%d/%m/%Y"),
+				    EarliestHomecareStartDate = col_date("%d/%m/%Y")))
+
+ASCDemographics <- read_csv("C:/RProjects/Homecare/Data/Demographics.csv")
+
+PostcodeLookup <- read_csv("C:/RProjects/Homecare/Data/PostcodeWardNhoodLookup.csv")
+
+HCHoursTable <- HomecareHours %>%
+left_join(ASCDemographics, by = c("PusedoMiCareID" = "MiCARE Number")) %>%
+left_join(PostcodeLookup, by = c("Postcode of Main Residence" = "Postcode September 2017")) %>%
+select(MiCareID, ElementID, ServiceDescription, SupplierName, Period, VisitsPerPeriod,
+PlannedHoursPerVisit, PlannedHoursPerVisitType, ElementDetailStartDate, ElementEndDate,
+EarliestHomecareStartDate, Locality, Ward = pre2018Ward, Neighbourhood) %>%
+unique() %>%
+mutate(PeriodAdj = if_else(Period == "Weekly", 1, 
+			 if_else(Period == "Fortnightly", 0.5,
+			 if_else(Period == "Every 4 weeks", 0.25, 1))),
+	 WeeklyVisits = VisitsPerPeriod * PeriodAdj,
+	 WeeklyHours = PlannedHoursPerVisit * WeeklyVisits)
+
+# Total number of Homecare Hours each month in each ward to give dataset for projections
+MonthlyVolumes <- HCHoursTable %>%
+rename(StartDate = ElementDetailStartDate) %>%
+mutate(EndDate = if_else(is.na(ElementEndDate), today(), ElementEndDate)) %>%
+mutate(Apr16 = as.double(pmax(pmin(as.Date("2016-04-30"), EndDate) - pmax(as.Date("2016-04-01"), StartDate) + 1, 0))*(WeeklyHours/7),
+       May16 = as.double(pmax(pmin(as.Date("2016-05-31"), EndDate) - pmax(as.Date("2016-05-01"), StartDate) + 1, 0))*(WeeklyHours/7),
+       Jun16 = as.double(pmax(pmin(as.Date("2016-06-30"), EndDate) - pmax(as.Date("2016-06-01"), StartDate) + 1, 0))*(WeeklyHours/7),
+       Jul16 = as.double(pmax(pmin(as.Date("2016-07-31"), EndDate) - pmax(as.Date("2016-07-01"), StartDate) + 1, 0))*(WeeklyHours/7),
+       Aug16 = as.double(pmax(pmin(as.Date("2016-08-31"), EndDate) - pmax(as.Date("2016-08-01"), StartDate) + 1, 0))*(WeeklyHours/7),
+       Sep16 = as.double(pmax(pmin(as.Date("2016-09-30"), EndDate) - pmax(as.Date("2016-09-01"), StartDate) + 1, 0))*(WeeklyHours/7),
+       Oct16 = as.double(pmax(pmin(as.Date("2016-10-30"), EndDate) - pmax(as.Date("2016-10-01"), StartDate) + 1, 0))*(WeeklyHours/7),
+       Nov16 = as.double(pmax(pmin(as.Date("2016-11-30"), EndDate) - pmax(as.Date("2016-11-01"), StartDate) + 1, 0))*(WeeklyHours/7),
+       Dec16 = as.double(pmax(pmin(as.Date("2016-12-31"), EndDate) - pmax(as.Date("2016-12-01"), StartDate) + 1, 0))*(WeeklyHours/7),
+       Jan17 = as.double(pmax(pmin(as.Date("2017-01-31"), EndDate) - pmax(as.Date("2017-01-01"), StartDate) + 1, 0))*(WeeklyHours/7),
+       Feb17 = as.double(pmax(pmin(as.Date("2017-02-28"), EndDate) - pmax(as.Date("2017-02-01"), StartDate) + 1, 0))*(WeeklyHours/7),
+       Mar17 = as.double(pmax(pmin(as.Date("2017-03-31"), EndDate) - pmax(as.Date("2017-03-01"), StartDate) + 1, 0))*(WeeklyHours/7),
+       Apr17 = as.double(pmax(pmin(as.Date("2017-04-30"), EndDate) - pmax(as.Date("2017-04-01"), StartDate) + 1, 0))*(WeeklyHours/7),
+       May17 = as.double(pmax(pmin(as.Date("2017-05-31"), EndDate) - pmax(as.Date("2017-05-01"), StartDate) + 1, 0))*(WeeklyHours/7),
+       Jun17 = as.double(pmax(pmin(as.Date("2017-06-30"), EndDate) - pmax(as.Date("2017-06-01"), StartDate) + 1, 0))*(WeeklyHours/7),
+       Jul17 = as.double(pmax(pmin(as.Date("2017-07-31"), EndDate) - pmax(as.Date("2017-07-01"), StartDate) + 1, 0))*(WeeklyHours/7),
+       Aug17 = as.double(pmax(pmin(as.Date("2017-08-31"), EndDate) - pmax(as.Date("2017-08-01"), StartDate) + 1, 0))*(WeeklyHours/7),
+       Sep17 = as.double(pmax(pmin(as.Date("2017-09-30"), EndDate) - pmax(as.Date("2017-09-01"), StartDate) + 1, 0))*(WeeklyHours/7),
+       Oct17 = as.double(pmax(pmin(as.Date("2017-10-30"), EndDate) - pmax(as.Date("2017-10-01"), StartDate) + 1, 0))*(WeeklyHours/7),
+       Nov17 = as.double(pmax(pmin(as.Date("2017-11-30"), EndDate) - pmax(as.Date("2017-11-01"), StartDate) + 1, 0))*(WeeklyHours/7),
+       Dec17 = as.double(pmax(pmin(as.Date("2017-12-31"), EndDate) - pmax(as.Date("2017-12-01"), StartDate) + 1, 0))*(WeeklyHours/7),
+       Jan18 = as.double(pmax(pmin(as.Date("2018-01-31"), EndDate) - pmax(as.Date("2018-01-01"), StartDate) + 1, 0))*(WeeklyHours/7),
+       Feb18 = as.double(pmax(pmin(as.Date("2018-02-28"), EndDate) - pmax(as.Date("2018-02-01"), StartDate) + 1, 0))*(WeeklyHours/7),
+       Mar18 = as.double(pmax(pmin(as.Date("2018-03-31"), EndDate) - pmax(as.Date("2018-03-01"), StartDate) + 1, 0))*(WeeklyHours/7),
+       Apr18 = as.double(pmax(pmin(as.Date("2018-04-30"), EndDate) - pmax(as.Date("2018-04-01"), StartDate) + 1, 0))*(WeeklyHours/7),
+       May18 = as.double(pmax(pmin(as.Date("2018-05-31"), EndDate) - pmax(as.Date("2018-05-01"), StartDate) + 1, 0))*(WeeklyHours/7),
+       Jun18 = as.double(pmax(pmin(as.Date("2018-06-30"), EndDate) - pmax(as.Date("2018-06-01"), StartDate) + 1, 0))*(WeeklyHours/7),
+       Jul18 = as.double(pmax(pmin(as.Date("2018-07-31"), EndDate) - pmax(as.Date("2018-07-01"), StartDate) + 1, 0))*(WeeklyHours/7),
+       Aug18 = as.double(pmax(pmin(as.Date("2018-08-31"), EndDate) - pmax(as.Date("2018-08-01"), StartDate) + 1, 0))*(WeeklyHours/7),
+       Sep18 = as.double(pmax(pmin(as.Date("2018-09-30"), EndDate) - pmax(as.Date("2018-09-01"), StartDate) + 1, 0))*(WeeklyHours/7),
+       Oct18 = as.double(pmax(pmin(as.Date("2018-10-30"), EndDate) - pmax(as.Date("2018-10-01"), StartDate) + 1, 0))*(WeeklyHours/7),
+       Nov18 = as.double(pmax(pmin(as.Date("2018-11-30"), EndDate) - pmax(as.Date("2018-11-01"), StartDate) + 1, 0))*(WeeklyHours/7),
+       Dec18 = as.double(pmax(pmin(as.Date("2018-12-31"), EndDate) - pmax(as.Date("2018-12-01"), StartDate) + 1, 0))*(WeeklyHours/7),
+       Jan19 = as.double(pmax(pmin(as.Date("2019-01-31"), EndDate) - pmax(as.Date("2019-01-01"), StartDate) + 1, 0))*(WeeklyHours/7),
+       Feb19 = as.double(pmax(pmin(as.Date("2019-02-28"), EndDate) - pmax(as.Date("2019-02-01"), StartDate) + 1, 0))*(WeeklyHours/7),
+       Mar19 = as.double(pmax(pmin(as.Date("2019-03-31"), EndDate) - pmax(as.Date("2019-03-01"), StartDate) + 1, 0))*(WeeklyHours/7),
+	 Apr19 = as.double(pmax(pmin(as.Date("2019-04-30"), EndDate) - pmax(as.Date("2019-04-01"), StartDate) + 1, 0))*(WeeklyHours/7),
+	 May19 = as.double(pmax(pmin(as.Date("2019-05-31"), EndDate) - pmax(as.Date("2019-05-01"), StartDate) + 1, 0))*(WeeklyHours/7),
+	 Jun19 = as.double(pmax(pmin(as.Date("2019-06-30"), EndDate) - pmax(as.Date("2019-06-01"), StartDate) + 1, 0))*(WeeklyHours/7),
+	 Jul19 = as.double(pmax(pmin(as.Date("2019-07-31"), EndDate) - pmax(as.Date("2019-07-01"), StartDate) + 1, 0))*(WeeklyHours/7),
+	 Aug19 = as.double(pmax(pmin(as.Date("2019-08-31"), EndDate) - pmax(as.Date("2019-08-01"), StartDate) + 1, 0))*(WeeklyHours/7))
+ 
+TotalHCHoursInMonth <- MonthlyVolumes %>%
+  group_by(Locality, Neighbourhood, Ward) %>%
+  summarise(`Apr-16` = sum(Apr17, na.rm = TRUE),
+    `May-16` = sum(May17, na.rm = TRUE),
+    `Jun-16` = sum(Jun17, na.rm = TRUE),
+    `Jul-16` = sum(Jul17, na.rm = TRUE),
+    `Aug-16` = sum(Aug17, na.rm = TRUE),
+    `Sep-16` = sum(Sep17, na.rm = TRUE),
+    `Oct-16` = sum(Oct17, na.rm = TRUE),
+    `Nov-16` = sum(Nov17, na.rm = TRUE),
+    `Dec-16` = sum(Dec17, na.rm = TRUE),
+    `Jan-17` = sum(Jan18, na.rm = TRUE),
+    `Feb-17` = sum(Feb18, na.rm = TRUE),
+    `Mar-17` = sum(Mar18, na.rm = TRUE),
+    `Apr-17` = sum(Apr17, na.rm = TRUE),
+    `May-17` = sum(May17, na.rm = TRUE),
+    `Jun-17` = sum(Jun17, na.rm = TRUE),
+    `Jul-17` = sum(Jul17, na.rm = TRUE),
+    `Aug-17` = sum(Aug17, na.rm = TRUE),
+    `Sep-17` = sum(Sep17, na.rm = TRUE),
+    `Oct-17` = sum(Oct17, na.rm = TRUE),
+    `Nov-17` = sum(Nov17, na.rm = TRUE),
+    `Dec-17` = sum(Dec17, na.rm = TRUE),
+    `Jan-18` = sum(Jan18, na.rm = TRUE),
+    `Feb-18` = sum(Feb18, na.rm = TRUE),
+    `Mar-18` = sum(Mar18, na.rm = TRUE),
+    `Apr-18` = sum(Apr18, na.rm = TRUE),
+    `May-18` = sum(May18, na.rm = TRUE),
+    `Jun-18` = sum(Jun18, na.rm = TRUE),
+    `Jul-18` = sum(Jul18, na.rm = TRUE),
+    `Aug-18` = sum(Aug18, na.rm = TRUE),
+    `Sep-18` = sum(Sep18, na.rm = TRUE),
+    `Oct-18` = sum(Oct18, na.rm = TRUE),
+    `Nov-18` = sum(Nov18, na.rm = TRUE),
+    `Dec-18` = sum(Dec18, na.rm = TRUE),
+    `Jan-19` = sum(Jan19, na.rm = TRUE),
+    `Feb-19` = sum(Feb19, na.rm = TRUE),
+    `Mar-19` = sum(Mar19, na.rm = TRUE),
+    `Apr-19` = sum(Apr19, na.rm = TRUE),
+    `May-19` = sum(May19, na.rm = TRUE),
+    `Jun-19` = sum(Jun19, na.rm = TRUE),
+    `Jul-19` = sum(Jul19, na.rm = TRUE),
+    `Aug-19` = sum(Aug19, na.rm = TRUE)) %>%
+  gather(c(4:44), key = "Month", value = "Hours") %>%
+  mutate(Month = as.Date(paste("01-", Month, sep = ""), format = "%d-%b-%y"), 
+         Hours = as.double(Hours)) %>%
+ arrange(Locality, Neighbourhood, Ward)
+View(TotalHCHoursInMonth) 
+
+Locality <- TotalHCHoursInMonth %>%
+group_by(Locality, Month) %>%
+summarise(TotalHours = sum(Hours, na.rm = TRUE))
+View(Locality)
+
+MonthlyHours <- TotalHCHoursInMonth %>%
+group_by(Month) %>%
+summarise(TotalHours = sum(Hours, na.rm = TRUE))
+View(MonthlyHours)
+
+
