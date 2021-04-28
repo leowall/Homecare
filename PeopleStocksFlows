@@ -1,0 +1,107 @@
+## Homecare People and Hours Data Import and Wrangle
+
+# File path to package library if needed
+# .libPaths("")
+
+library(tidyverse)
+library(readxl)
+library(lubridate)
+library(growthrates)
+library(zoo)
+library(patchwork)
+library(deSolve)
+library(httr)
+library(openxlsx)
+library(reshape2)
+
+ASC_CP_Filepath <- ""
+
+ASC_CP <- read_xlsx(ASC_CP_Filepath, sheet = "Package of Care", skip = 1
+
+ASC_PersonCP <- ASC_CP %>%
+  group_by(LASPersonID, Service) %>%
+  summarise(MinStartDate = min(StartDate),
+            MaxEndDate = max(ModifiedEndDate)) %>%
+  ungroup() %>%
+  mutate(LoS_Days = MaxEndDate - MinStartDate,
+         StartYear = year(MinStartDate),
+         StartMonth = month(MinStartDate),
+         StartWeek = floor_date(MinStartDate, "week"),
+         StartWeekNum = week(MinStartDate),
+         EndYear = year(MaxEndDate),
+         EndMonth = month(MaxEndDate),
+         EndWeek = floor_date(MaxEndDate, "week"),
+         EndWeekNum = week(MaxEndDate),
+         DateRange = interval(MinStartDate, MaxEndDate),
+         dummy = TRUE)
+
+## Table of ASC Services / Care Packages
+ASC_Services <- ASC_CP %>%
+  group_by(Service) %>%
+  summarise(People = n()) %>%
+  mutate(dummy = TRUE)
+
+### Dates Table for use with stocks and flows
+WeeklyDates <- data.frame(seq(as.Date("2015-12-27"), as.Date(today()), 
+                              by = "week")) %>%
+  rename(WeekStart = `seq.as.Date..2015.12.27....as.Date.today.....by....week..`) %>%
+  mutate(WeekEnd = WeekStart + 6,
+         Week = week(WeekStart),
+         Month = month(WeekStart),
+         Year = year(WeekStart),
+         WeekRange = interval(WeekStart, WeekEnd),
+         WeekNum = as.character(WeekStart, "%V-%Y"),
+         dummy = TRUE)
+
+
+### Number of People Supported by each service each week
+NumInServ <- WeeklyDates %>%
+  left_join(ASC_PersonCP, by = "dummy") %>%
+  select(-dummy) %>%
+  filter((WeekStart >= MinStartDate & WeekStart <= MaxEndDate) | 
+           (WeekEnd >= MinStartDate & WeekEnd <= MaxEndDate)) %>%
+  group_by(Service, WeekStart, WeekEnd, WeekNum) %>%
+  summarise(InService = n()) %>%
+  rename(StartWeek = WeekStart, EndWeek = WeekEnd)
+  
+
+
+## Create table with stocks and flows for each service
+InFlow <- ASC_PersonCP %>%
+  filter(StartYear >= 2016) %>%
+  group_by(Service, StartWeek) %>%
+  summarise(Starters = n()) %>%
+  arrange(Service, StartWeek) %>%
+  unique() %>%
+  ungroup()
+  
+OutFlow <- ASC_PersonCP %>%
+  filter(EndYear >= 2016,
+         MaxEndDate < today()) %>%
+  group_by(Service, EndWeek) %>%
+  summarise(Leavers = n()) %>%
+  arrange(Service, EndWeek) %>%
+  unique() %>%
+  ungroup()
+
+
+
+### All Service Flow table
+ASC_Flows <- WeeklyDates %>%
+  left_join(ASC_Services, by = c("dummy" = "dummy")) %>%
+  left_join(InFlow, by = c("WeekStart" = "StartWeek", "Service" = "Service")) %>%
+  left_join(OutFlow, by = c("WeekStart" = "EndWeek", "Service" = "Service")) %>%
+  left_join(NumInServ, by = c("WeekStart" = "StartWeek", "Service" = "Service")) %>%
+  select(Service, WeekStart, WeekEnd, Week, Month, Year, WeekNum = WeekNum.x, 
+         Starters, Leavers, InService) %>%
+  mutate(WeekStart = as.Date(WeekStart, format = "%Y-%m-%d"),
+         WeekEnd = as.Date(WeekEnd, format = "%Y-%m-%d")) %>%
+  arrange(Service, WeekStart) 
+##   %>% write_csv("C:/RProjects/COVIDDemandModel/Output/ASCFlows.csv")
+
+## Long Version of All Services Flow Table
+ASC_Flows_Long <- ASC_Flows %>%
+  pivot_longer(c("Starters", "Leavers", "InService"), names_to = "Cohort", 
+               values_to = "People") %>%
+  arrange(Service, WeekStart, Cohort)
+##  %>% write_csv("C:/RProjects/COVIDDemandModel/Output/ASCFlowsLong.csv")
