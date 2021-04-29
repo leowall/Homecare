@@ -1,0 +1,97 @@
+### Import and Calculation of homecare hours stocks and flows each week
+
+HCHours_Filepath <- "C:/RProjects/Data/HomecareHoursApr21.csv"
+
+# file import
+HCHoursRaw <- read_csv(HCHours_Filepath, col_types = cols(
+  `Date of Birth` = col_date("%d/%m/%Y"),
+  `Date of Death` = col_date("%d/%m/%Y"),
+  `Care Item Start Date` = col_date("%d/%m/%Y"),
+  `Care Item End Date` = col_date("%d/%m/%Y"),
+  `Care Item Duration (wks)` = col_double()
+))
+
+
+HCServices <- HCHoursRaw %>%
+  group_by(`Service Level`) %>%
+  summarise(Count = n())
+
+HCHours <- HCHoursRaw %>%
+  mutate(`Cost Per Hour` = as.numeric(gsub("£", "", `Cost Per Hour`)),
+         `Weekly Cost` = as.numeric(gsub("£", "", `Weekly Cost`)),
+         ModifiedEndDate = if_else(is.na(`Care Item End Date`), today(),
+                                   `Care Item End Date`)) %>%
+  filter(!str_detect(`Service Level`, "Reablement")) %>%
+  select(-c("Is Current","Provider","Care Package Line Item Id","Reason For End Date",
+            "Comments")) %>%
+  group_by(`Client ID`, `Date Of Birth`, `Date Of Death`,`Service Level`) %>%
+  summarise(StartDate = min(`Care Item Start Date`),
+            EndDate = max(ModifiedEndDate),
+            HCHours = sum(`Qty (Hours)`, na.rm = TRUE),
+            WeeklyVisits = sum(`Planned Weekly Visits (Timetable)`, na.rm = TRUE)) %>%
+  arrange(`Client ID`, StartDate) %>%
+  ungroup() %>%
+  mutate(LoS_Days = EndDate - StartDate,
+         StartYear = year(StartDate),
+         StartMonth = month(StartDate),
+         StartWeek = floor_date(StartDate, "week"),
+         StartWeekNum = week(StartDate),
+         EndYear = year(EndDate),
+         EndMonth = month(EndDate),
+         EndWeek = floor_date(EndDate, "week"),
+         EndWeekNum = week(EndDate),
+         DateRange = interval(StartDate, EndDate),
+         dummy = TRUE)
+
+
+HoursInServ <- WeeklyDates %>%
+  left_join(HCHours, by = "dummy") %>%
+  select(-dummy) %>%
+  filter((WeekStart >= StartDate & WeekStart <= EndDate) | 
+           (WeekEnd >= StartDate & WeekEnd <= EndDate)) %>%
+  group_by(WeekStart, WeekEnd, WeekNum) %>%
+  summarise(InService = sum(HCHours, na.rm = TRUE)) %>%
+  rename(StartWeek = WeekStart, EndWeek = WeekEnd)
+
+# Create table with in and out flows for each service
+HoursInFlow <- HCHours %>%
+  filter(StartYear >= 2016) %>%
+  group_by(StartWeek) %>%
+  summarise(Starters = sum(HCHours, na.rm = TRUE)) %>%
+  arrange(StartWeek) %>%
+  unique() %>%
+  ungroup()
+
+HoursOutFlow <- HCHours %>%
+  filter(EndYear >= 2016,
+         EndDate < today()) %>%
+  group_by(EndWeek) %>%
+  summarise(Leavers = sum(HCHours, na.rm = TRUE)) %>%
+  arrange(EndWeek) %>%
+  unique() %>%
+  ungroup()
+
+
+HCHours_Flows <- WeeklyDates %>%
+  left_join(HoursInFlow, by = c("WeekStart" = "StartWeek")) %>%
+  left_join(HoursOutFlow, by = c("WeekStart" = "EndWeek")) %>%
+  left_join(HoursInServ, by = c("WeekStart" = "StartWeek")) %>%
+  select( WeekStart, WeekEnd, Week, Month, Year, WeekNum = WeekNum.x, 
+         Starters, Leavers, InService) %>%
+  mutate(WeekStart = as.Date(WeekStart, format = "%Y-%m-%d"),
+         WeekEnd = as.Date(WeekEnd, format = "%Y-%m-%d")) %>%
+  arrange(WeekStart) 
+##   %>% write_csv("C:/RProjects/COVIDDemandModel/Output/HCHours_Flows.csv")
+
+## Long Version of All Services Flow Table
+ASC_Flows_Long <- ASC_Flows %>%
+  pivot_longer(c("Starters", "Leavers", "InService"), names_to = "Cohort", 
+               values_to = "People") %>%
+  arrange(Service_type, WeekStart, Cohort)
+##  %>% write_csv("C:/RProjects/COVIDDemandModel/Output/ASCFlowsLong.csv")
+
+
+HCHours_Flows %>%
+  ggplot() +
+  geom_line(aes(WeekStart, Starters), colour = "red") +
+  geom_line(aes(WeekStart, Leavers), colour = "blue")
