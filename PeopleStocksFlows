@@ -14,13 +14,29 @@ library(httr)
 library(openxlsx)
 library(reshape2)
 
+
+### Data Import
+# set filepath for exported file from business objects to be imported into R
 ASC_CP_Filepath <- ""
 
-ASC_CP <- read_xlsx(ASC_CP_Filepath, sheet = "Package of Care", skip = 1
+# file import
+ASC_CP <- read_csv(ASC_CP_Filepath, col_types = cols(
+                      BIRTH_DTTM = col_date("%d/%m/%Y"),
+                      DEATH_DTTM = col_date("%d/%m/%Y"),
+                      DOD_REC_DTTM = col_date("%d/%m/%Y"),
+                      START_DTTM = col_date("%d/%m/%Y"),
+                      ENDDATE = col_date("%d/%m/%Y")
+))
 
+# View(ASC_CP)
+
+### Data Wrangling
+# Aggregating data lines into single instances of care packages with start,
+# end dates and duration
 ASC_PersonCP <- ASC_CP %>%
-  group_by(LASPersonID, Service) %>%
-  summarise(MinStartDate = min(StartDate),
+  group_by(EXTERNAL_ID, Service_type) %>%
+  mutate(ModifiedEndDate = if_else(is.na(ENDDATE), today(), ENDDATE)) %>%
+  summarise(MinStartDate = min(START_DTTM),
             MaxEndDate = max(ModifiedEndDate)) %>%
   ungroup() %>%
   mutate(LoS_Days = MaxEndDate - MinStartDate,
@@ -37,11 +53,11 @@ ASC_PersonCP <- ASC_CP %>%
 
 ## Table of ASC Services / Care Packages
 ASC_Services <- ASC_CP %>%
-  group_by(Service) %>%
+  group_by(Service_type) %>%
   summarise(People = n()) %>%
   mutate(dummy = TRUE)
 
-### Dates Table for use with stocks and flows
+### Weekly Dates Table for use with stocks and flows
 WeeklyDates <- data.frame(seq(as.Date("2015-12-27"), as.Date(today()), 
                               by = "week")) %>%
   rename(WeekStart = `seq.as.Date..2015.12.27....as.Date.today.....by....week..`) %>%
@@ -54,54 +70,61 @@ WeeklyDates <- data.frame(seq(as.Date("2015-12-27"), as.Date(today()),
          dummy = TRUE)
 
 
-### Number of People Supported by each service each week
+## Calculation of weekly stocks and flows for each service 
+# Number of People Supported by each service each week
 NumInServ <- WeeklyDates %>%
   left_join(ASC_PersonCP, by = "dummy") %>%
   select(-dummy) %>%
   filter((WeekStart >= MinStartDate & WeekStart <= MaxEndDate) | 
            (WeekEnd >= MinStartDate & WeekEnd <= MaxEndDate)) %>%
-  group_by(Service, WeekStart, WeekEnd, WeekNum) %>%
+  group_by(Service_type, WeekStart, WeekEnd, WeekNum) %>%
   summarise(InService = n()) %>%
   rename(StartWeek = WeekStart, EndWeek = WeekEnd)
-  
 
-
-## Create table with stocks and flows for each service
+# Create table with in and out flows for each service
 InFlow <- ASC_PersonCP %>%
   filter(StartYear >= 2016) %>%
-  group_by(Service, StartWeek) %>%
+  group_by(Service_type, StartWeek) %>%
   summarise(Starters = n()) %>%
-  arrange(Service, StartWeek) %>%
+  arrange(Service_type, StartWeek) %>%
   unique() %>%
   ungroup()
-  
+
 OutFlow <- ASC_PersonCP %>%
   filter(EndYear >= 2016,
          MaxEndDate < today()) %>%
-  group_by(Service, EndWeek) %>%
+  group_by(Service_type, EndWeek) %>%
   summarise(Leavers = n()) %>%
-  arrange(Service, EndWeek) %>%
+  arrange(Service_type, EndWeek) %>%
   unique() %>%
   ungroup()
 
 
-
-### All Service Flow table
+# Combining tables into single All Service Stock and Flow table
 ASC_Flows <- WeeklyDates %>%
   left_join(ASC_Services, by = c("dummy" = "dummy")) %>%
-  left_join(InFlow, by = c("WeekStart" = "StartWeek", "Service" = "Service")) %>%
-  left_join(OutFlow, by = c("WeekStart" = "EndWeek", "Service" = "Service")) %>%
-  left_join(NumInServ, by = c("WeekStart" = "StartWeek", "Service" = "Service")) %>%
-  select(Service, WeekStart, WeekEnd, Week, Month, Year, WeekNum = WeekNum.x, 
+  left_join(InFlow, by = c("WeekStart" = "StartWeek", "Service_type" = "Service_type")) %>%
+  left_join(OutFlow, by = c("WeekStart" = "EndWeek", "Service_type" = "Service_type")) %>%
+  left_join(NumInServ, by = c("WeekStart" = "StartWeek", "Service_type" = "Service_type")) %>%
+  select(Service_type, WeekStart, WeekEnd, Week, Month, Year, WeekNum = WeekNum.x, 
          Starters, Leavers, InService) %>%
   mutate(WeekStart = as.Date(WeekStart, format = "%Y-%m-%d"),
          WeekEnd = as.Date(WeekEnd, format = "%Y-%m-%d")) %>%
-  arrange(Service, WeekStart) 
+  arrange(Service_type, WeekStart) 
 ##   %>% write_csv("C:/RProjects/COVIDDemandModel/Output/ASCFlows.csv")
 
 ## Long Version of All Services Flow Table
 ASC_Flows_Long <- ASC_Flows %>%
   pivot_longer(c("Starters", "Leavers", "InService"), names_to = "Cohort", 
                values_to = "People") %>%
-  arrange(Service, WeekStart, Cohort)
+  arrange(Service_type, WeekStart, Cohort)
 ##  %>% write_csv("C:/RProjects/COVIDDemandModel/Output/ASCFlowsLong.csv")
+
+### Exploratory Analysis
+
+
+### Data Modelling
+
+
+### Output
+
