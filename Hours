@@ -21,34 +21,26 @@ HCHours <- HCHoursRaw %>%
          `Weekly Cost` = as.numeric(gsub("£", "", `Weekly Cost`)),
          ModifiedEndDate = if_else(is.na(`Care Item End Date`), today(),
                                    `Care Item End Date`)) %>%
+  rename(StartDate = `Care Item Start Date`, EndDate = `Care Item End Date`,
+         HCHours = `Qty (Hours)`) %>%
   filter(!str_detect(`Service Level`, "Reablement")) %>%
-  select(-c("Is Current","Provider","Care Package Line Item Id","Reason For End Date",
-            "Comments")) %>%
-  group_by(`Client ID`, `Date Of Birth`, `Date Of Death`,`Service Level`) %>%
-  summarise(StartDate = min(`Care Item Start Date`),
-            EndDate = max(ModifiedEndDate),
-            HCHours = sum(`Qty (Hours)`, na.rm = TRUE),
-            WeeklyVisits = sum(`Planned Weekly Visits (Timetable)`, na.rm = TRUE)) %>%
-  arrange(`Client ID`, StartDate) %>%
-  ungroup() %>%
   mutate(LoS_Days = EndDate - StartDate,
          StartYear = year(StartDate),
          StartMonth = month(StartDate),
          StartWeek = floor_date(StartDate, "week"),
          StartWeekNum = week(StartDate),
-         EndYear = year(EndDate),
-         EndMonth = month(EndDate),
-         EndWeek = floor_date(EndDate, "week"),
-         EndWeekNum = week(EndDate),
-         DateRange = interval(StartDate, EndDate),
+         EndYear = year(ModifiedEndDate),
+         EndMonth = month(ModifiedEndDate),
+         EndWeek = floor_date(ModifiedEndDate, "week"),
+         EndWeekNum = week(ModifiedEndDate),
+         DateRange = interval(StartDate, ModifiedEndDate),
          dummy = TRUE)
-
 
 HoursInServ <- WeeklyDates %>%
   left_join(HCHours, by = "dummy") %>%
   select(-dummy) %>%
-  filter((WeekStart >= StartDate & WeekStart <= EndDate) | 
-           (WeekEnd >= StartDate & WeekEnd <= EndDate)) %>%
+  filter((WeekStart >= StartDate & WeekStart <= ModifiedEndDate) | 
+           (WeekEnd >= StartDate & WeekEnd <= ModifiedEndDate)) %>%
   group_by(WeekStart, WeekEnd, WeekNum) %>%
   summarise(InService = sum(HCHours, na.rm = TRUE)) %>%
   rename(StartWeek = WeekStart, EndWeek = WeekEnd)
@@ -95,3 +87,11 @@ HCHours_Flows %>%
   ggplot() +
   geom_line(aes(WeekStart, Starters), colour = "red") +
   geom_line(aes(WeekStart, Leavers), colour = "blue")
+
+HCHours_Flows %>%
+  ggplot(aes(WeekStart, InService)) +
+  geom_line()
+
+
+HCHoursCheck <- HCHoursRaw %>%
+  filter(`Care Item Start Date` >= "2019-08-11" & `Care Item Start Date` <= "2019-10-05")
